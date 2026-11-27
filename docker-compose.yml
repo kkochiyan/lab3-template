@@ -1,8 +1,6 @@
-version: "3"
 services:
   postgres:
     image: library/postgres:13
-    container_name: postgres
     restart: on-failure
     environment:
       POSTGRES_USER: postgres
@@ -12,9 +10,133 @@ services:
       - db-data:/var/lib/postgresql/data
       - ./postgres/:/docker-entrypoint-initdb.d/
     ports:
-      - "5432:5432"
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "postgres", "-d", "postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
 
-# TODO добавить сервисы
+  reservation-migrations:
+    build: ./reservation-service
+    command: ["python", "-m", "alembic", "upgrade", "head"]
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: reservations
+      DB_USER: program
+      DB_PASS: test
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  reservation-seed:
+    image: library/postgres:13
+    environment:
+      PGPASSWORD: test
+    volumes:
+      - ./reservation-service/seed.sql:/seed.sql:ro
+    command:
+      - psql
+      - -h
+      - postgres
+      - -U
+      - program
+      - -d
+      - reservations
+      - -v
+      - ON_ERROR_STOP=1
+      - -f
+      - /seed.sql
+    depends_on:
+      reservation-migrations:
+        condition: service_completed_successfully
+
+  reservation-service:
+    build: ./reservation-service
+    ports:
+      - "8070:8070"
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: reservations
+      DB_USER: program
+      DB_PASS: test
+    depends_on:
+      reservation-seed:
+        condition: service_completed_successfully
+
+  payment-migrations:
+    build: ./payment-service
+    command: ["python", "-m", "alembic", "upgrade", "head"]
+    environment: &payment-db
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: payments
+      DB_USER: program
+      DB_PASS: test
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  payment-service:
+    build: ./payment-service
+    ports:
+      - "8060:8060"
+    environment: *payment-db
+    depends_on:
+      payment-migrations:
+        condition: service_completed_successfully
+
+  loyalty-migrations:
+    build: ./loyalty-service
+    command: ["python", "-m", "alembic", "upgrade", "head"]
+    environment: &loyalty-db
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: loyalties
+      DB_USER: program
+      DB_PASS: test
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  loyalty-seed:
+    image: library/postgres:13
+    environment:
+      PGPASSWORD: test
+    volumes:
+      - ./loyalty-service/seed.sql:/seed.sql:ro
+    command: ["psql", "-h", "postgres", "-U", "program", "-d", "loyalties", "-v", "ON_ERROR_STOP=1", "-f", "/seed.sql"]
+    depends_on:
+      loyalty-migrations:
+        condition: service_completed_successfully
+
+  loyalty-service:
+    build: ./loyalty-service
+    ports:
+      - "8050:8050"
+    environment: *loyalty-db
+    depends_on:
+      loyalty-seed:
+        condition: service_completed_successfully
+
+  gateway-service:
+    build: ./gateway-service
+    ports:
+      - "8080:8080"
+    environment:
+      RESERVATION_SERVICE_HOST: reservation-service
+      RESERVATION_SERVICE_PORT: "8070"
+      PAYMENT_SERVICE_HOST: payment-service
+      PAYMENT_SERVICE_PORT: "8060"
+      LOYALTY_SERVICE_HOST: loyalty-service
+      LOYALTY_SERVICE_PORT: "8050"
+    depends_on:
+      - reservation-service
+      - payment-service
+      - loyalty-service
 
 volumes:
   db-data:
