@@ -6,6 +6,9 @@ on:
   pull_request:
     branches:
       - master
+permissions:
+  contents: read
+  checks: write
 jobs:
   build:
     name: Autograding
@@ -17,11 +20,34 @@ jobs:
 
       - uses: docker/setup-buildx-action@v2
 
-      # TODO build and run unit tests
-
       - name: Build images
         timeout-minutes: 10
         run: docker compose build
+
+      - name: Run Payment Service tests
+        run: |
+          docker compose run --rm --no-deps \
+            -v "$PWD/payment-service/tests:/app/tests:ro" \
+            payment-service python -m unittest discover -s tests -v
+
+      - name: Run Reservation Service tests
+        run: |
+          docker compose run --rm --no-deps \
+            -v "$PWD/reservation-service/tests:/app/tests:ro" \
+            reservation-service python -B -m unittest discover -s tests -v
+
+      - name: Run Gateway Service tests
+        run: |
+          docker compose run --rm --no-deps \
+            -v "$PWD/gateway-service/tests:/app/tests:ro" \
+            gateway-service python -B -m unittest discover -s tests -v
+
+      - name: Run Loyalty Service tests
+        run: |
+          docker compose run --rm --no-deps \
+            -v "$PWD/loyalty-service/tests:/app/tests:ro" \
+            -v "$PWD/loyalty-service/seed.sql:/app/seed.sql:ro" \
+            loyalty-service python -m unittest discover -s tests -v
 
       - name: Run containers
         timeout-minutes: 5
@@ -31,24 +57,37 @@ jobs:
         env:
           WAIT_PORTS: 8080,8070,8060,8050
 
-      # TODO setup variant, service and port
+      - name: Install Newman
+        run: npm install --global newman@6.2.3
 
       - name: Run API Tests
         timeout-minutes: 5
         run: ./scripts/test-script.sh
         env:
-          VARIANT: <variant>
-          SERVICE_NAME: <your service name>
-          PORT_NUMBER: <port number>
+          VARIANT: v2
+          SERVICE_NAME: loyalty-service
+          PORT_NUMBER: "8050"
 
       - uses: education/autograding@v1
         id: autograder
         continue-on-error: true
 
+      - name: Check whether Google Sheets reporting is configured
+        id: sheets_config
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+        run: |
+          if [[ -n "$GOOGLE_API_KEY" ]]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Skipping Google Sheets reporting because GOOGLE_API_KEY is not configured."
+          fi
+
       - name: Github auto grader mark
+        if: steps.sheets_config.outputs.enabled == 'true'
         uses: Romanow/google-sheet-autograder-marker@v1.0
         with:
-          google_token: ${{secrets.GOOGLE_API_KEY}}
+          google_token: ${{ secrets.GOOGLE_API_KEY }}
           sheet_id: "1xkgjUX6Qmk7rdJG-QPOToav-HWWtthJjnShIKnw3oIY"
           homework_number: 3
           user_column: 'D'

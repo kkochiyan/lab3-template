@@ -1,0 +1,2 @@
+class ReservationOwnerConflict(Exception):
+    pass
